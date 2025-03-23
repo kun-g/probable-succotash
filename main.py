@@ -7,7 +7,7 @@ from select_corners import interactive_select_corners, save_corners, load_corner
 
 def overlay_screenshot(template, screenshot, corners):
     """
-    将App截图覆盖到模板图片的手机屏幕上
+    将模板图片覆盖到App截图上，并将屏幕区域的绿色设为透明
     
     参数:
     template: 模板图片（已加载的图像）
@@ -23,26 +23,6 @@ def overlay_screenshot(template, screenshot, corners):
     if screenshot_img is None:
         raise ValueError(f"无法读取截图文件: {screenshot}")
     
-    # 计算目标四边形的宽高比
-    width = np.sqrt(((corners[1][0] - corners[0][0]) ** 2) + ((corners[1][1] - corners[0][1]) ** 2))
-    height = np.sqrt(((corners[3][0] - corners[0][0]) ** 2) + ((corners[3][1] - corners[0][1]) ** 2))
-    target_ratio = width / height
-    
-    # 调整截图以匹配目标宽高比
-    screenshot_h, screenshot_w = screenshot_img.shape[:2]
-    current_ratio = screenshot_w / screenshot_h
-    
-    if current_ratio > target_ratio:
-        # 过宽，需要裁剪宽度
-        new_width = int(screenshot_h * target_ratio)
-        start_x = (screenshot_w - new_width) // 2
-        screenshot_img = screenshot_img[:, start_x:start_x+new_width]
-    elif current_ratio < target_ratio:
-        # 过高，需要裁剪高度
-        new_height = int(screenshot_w / target_ratio)
-        start_y = (screenshot_h - new_height) // 2
-        screenshot_img = screenshot_img[start_y:start_y+new_height, :]
-    
     # 计算透视变换
     corners = np.array(corners, dtype=np.float32)
     screenshot_h, screenshot_w = screenshot_img.shape[:2]
@@ -55,25 +35,43 @@ def overlay_screenshot(template, screenshot, corners):
     
     # 计算变换矩阵
     M = cv2.getPerspectiveTransform(screenshot_corners, corners)
-    print("变换矩阵:", M)
     
-    # 应用透视变换
+    # 应用透视变换，将截图变换到模板大小
     warped_screenshot = cv2.warpPerspective(
         screenshot_img, M, (template.shape[1], template.shape[0])
     )
     
-    # 创建一个掩码，确定应该被替换的区域
+    # 创建一个掩码，确定屏幕区域
     mask = np.zeros(template.shape[:2], dtype=np.uint8)
     cv2.fillConvexPoly(mask, corners.astype(np.int32), 255)
     
-    # 创建掩码的逆
-    inv_mask = cv2.bitwise_not(mask)
+    # 在模板中提取屏幕区域
+    screen_area = cv2.bitwise_and(template, template, mask=mask)
     
-    # 使用掩码分离原始模板的背景和前景
-    background = cv2.bitwise_and(template, template, mask=inv_mask)
+    # 检测绿色区域 (在HSV颜色空间中更容易识别颜色)
+    hsv_screen = cv2.cvtColor(screen_area, cv2.COLOR_BGR2HSV)
+    # 设置绿色的HSV范围 - 可能需要根据实际绿屏调整这个值
+    lower_green = np.array([40, 40, 40])
+    upper_green = np.array([80, 255, 255])
+    green_mask = cv2.inRange(hsv_screen, lower_green, upper_green)
     
-    # 将变换后的截图添加到背景中
-    result = cv2.add(background, cv2.bitwise_and(warped_screenshot, warped_screenshot, mask=mask))
+    # 创建最终掩码：屏幕区域中的非绿色部分
+    final_mask = cv2.bitwise_and(mask, cv2.bitwise_not(green_mask))
+    
+    # 使用最终掩码提取模板中的非绿色部分
+    foreground = cv2.bitwise_and(template, template, mask=final_mask)
+    
+    # 使用green_mask提取屏幕区域，这部分将显示截图
+    background_mask = cv2.bitwise_and(mask, green_mask)
+    background = cv2.bitwise_and(warped_screenshot, warped_screenshot, mask=background_mask)
+    
+    # 模板的非屏幕区域
+    non_screen_mask = cv2.bitwise_not(mask)
+    non_screen_area = cv2.bitwise_and(template, template, mask=non_screen_mask)
+    
+    # 组合所有部分：非屏幕区域 + 屏幕区域中的非绿色部分 + 截图中对应绿色区域的部分
+    result = cv2.add(non_screen_area, foreground)
+    result = cv2.add(result, background)
     
     return result
 
