@@ -3,6 +3,7 @@ import numpy as np
 import argparse
 import os
 import json
+from select_corners import interactive_select_corners, save_corners, load_corners
 
 def overlay_screenshot(template, screenshot, corners):
     """
@@ -22,6 +23,26 @@ def overlay_screenshot(template, screenshot, corners):
     if screenshot_img is None:
         raise ValueError(f"无法读取截图文件: {screenshot}")
     
+    # 计算目标四边形的宽高比
+    width = np.sqrt(((corners[1][0] - corners[0][0]) ** 2) + ((corners[1][1] - corners[0][1]) ** 2))
+    height = np.sqrt(((corners[3][0] - corners[0][0]) ** 2) + ((corners[3][1] - corners[0][1]) ** 2))
+    target_ratio = width / height
+    
+    # 调整截图以匹配目标宽高比
+    screenshot_h, screenshot_w = screenshot_img.shape[:2]
+    current_ratio = screenshot_w / screenshot_h
+    
+    if current_ratio > target_ratio:
+        # 过宽，需要裁剪宽度
+        new_width = int(screenshot_h * target_ratio)
+        start_x = (screenshot_w - new_width) // 2
+        screenshot_img = screenshot_img[:, start_x:start_x+new_width]
+    elif current_ratio < target_ratio:
+        # 过高，需要裁剪高度
+        new_height = int(screenshot_w / target_ratio)
+        start_y = (screenshot_h - new_height) // 2
+        screenshot_img = screenshot_img[start_y:start_y+new_height, :]
+    
     # 计算透视变换
     corners = np.array(corners, dtype=np.float32)
     screenshot_h, screenshot_w = screenshot_img.shape[:2]
@@ -34,6 +55,7 @@ def overlay_screenshot(template, screenshot, corners):
     
     # 计算变换矩阵
     M = cv2.getPerspectiveTransform(screenshot_corners, corners)
+    print("变换矩阵:", M)
     
     # 应用透视变换
     warped_screenshot = cv2.warpPerspective(
@@ -54,78 +76,6 @@ def overlay_screenshot(template, screenshot, corners):
     result = cv2.add(background, cv2.bitwise_and(warped_screenshot, warped_screenshot, mask=mask))
     
     return result
-
-def interactive_select_corners(image_path, num_screens=1):
-    """
-    允许用户交互式地选择图像中的多个手机屏幕的角点
-    
-    参数:
-    image_path (str): 图像路径
-    num_screens (int): 手机屏幕数量
-    
-    返回:
-    list: 每个屏幕的角点坐标列表
-    """
-    all_corners = []
-    current_screen = 0
-    current_corners = []
-    
-    def click_event(event, x, y, flags, param):
-        nonlocal current_screen, current_corners, img_copy
-        
-        if event == cv2.EVENT_LBUTTONDOWN:
-            current_corners.append([x, y])
-            cv2.circle(img_copy, (x, y), 5, (0, 0, 255), -1)
-            cv2.imshow("请选择屏幕角点", img_copy)
-            print(f"已选择点: ({x}, {y})")
-            
-            if len(current_corners) == 4:
-                all_corners.append(current_corners)
-                print(f"屏幕 {current_screen + 1} 的四个角点已选择")
-                
-                current_screen += 1
-                current_corners = []
-                
-                if current_screen < num_screens:
-                    print(f"请选择屏幕 {current_screen + 1} 的四个角点...")
-                    # 重置显示图像
-                    img_copy = img.copy()
-                    cv2.imshow("请选择屏幕角点", img_copy)
-                else:
-                    print("所有屏幕角点已选择，按任意键继续...")
-                    cv2.waitKey(0)
-                    cv2.destroyAllWindows()
-    
-    img = cv2.imread(image_path)
-    if img is None:
-        raise ValueError(f"无法读取图像文件: {image_path}")
-        
-    img_copy = img.copy()
-    cv2.imshow("请选择屏幕角点", img_copy)
-    cv2.setMouseCallback("请选择屏幕角点", click_event)
-    
-    print(f"请选择屏幕 {current_screen + 1} 的四个角点 (左上, 右上, 右下, 左下)...")
-    
-    while len(all_corners) < num_screens:
-        key = cv2.waitKey(1)
-        if key == 27:  # ESC键，提前退出
-            break
-    
-    cv2.destroyAllWindows()
-    return all_corners
-
-def save_corners(corners, filename="corners.json"):
-    """保存角点坐标到文件"""
-    with open(filename, 'w') as f:
-        json.dump(corners, f)
-    print(f"角点坐标已保存到 {filename}")
-
-def load_corners(filename="corners.json"):
-    """从文件加载角点坐标"""
-    if os.path.exists(filename):
-        with open(filename, 'r') as f:
-            return json.load(f)
-    return None
 
 def main():
     parser = argparse.ArgumentParser(description="将App截图覆盖到手机模板上")
