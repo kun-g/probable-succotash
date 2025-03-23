@@ -36,42 +36,63 @@ def overlay_screenshot(template, screenshot, corners):
     # 计算变换矩阵
     M = cv2.getPerspectiveTransform(screenshot_corners, corners)
     
-    # 应用透视变换，将截图变换到模板大小
+    # 应用透视变换，将截图变换到模板大小，使用INTER_LINEAR插值方法
     warped_screenshot = cv2.warpPerspective(
-        screenshot_img, M, (template.shape[1], template.shape[0])
+        screenshot_img, M, (template.shape[1], template.shape[0]),
+        flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT
     )
     
     # 创建一个掩码，确定屏幕区域
     mask = np.zeros(template.shape[:2], dtype=np.uint8)
     cv2.fillConvexPoly(mask, corners.astype(np.int32), 255)
     
+    # 应用高斯模糊平滑掩码边缘，减少锯齿
+    mask_blurred = cv2.GaussianBlur(mask, (5, 5), 0)
+    
     # 在模板中提取屏幕区域
     screen_area = cv2.bitwise_and(template, template, mask=mask)
     
     # 检测绿色区域 (在HSV颜色空间中更容易识别颜色)
     hsv_screen = cv2.cvtColor(screen_area, cv2.COLOR_BGR2HSV)
+    
     # 设置绿色的HSV范围 - 可能需要根据实际绿屏调整这个值
     lower_green = np.array([40, 40, 40])
     upper_green = np.array([80, 255, 255])
     green_mask = cv2.inRange(hsv_screen, lower_green, upper_green)
     
+    # 应用形态学操作平滑绿色掩码边缘
+    kernel = np.ones((3,3), np.uint8)
+    green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_OPEN, kernel)
+    green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_CLOSE, kernel)
+    
+    # 应用高斯模糊平滑绿色掩码边缘
+    green_mask_blurred = cv2.GaussianBlur(green_mask, (3, 3), 0)
+    
     # 创建最终掩码：屏幕区域中的非绿色部分
-    final_mask = cv2.bitwise_and(mask, cv2.bitwise_not(green_mask))
+    final_mask = cv2.bitwise_and(mask_blurred, cv2.bitwise_not(green_mask_blurred))
     
-    # 使用最终掩码提取模板中的非绿色部分
-    foreground = cv2.bitwise_and(template, template, mask=final_mask)
+    # 将掩码转换为浮点型，以便进行平滑过渡
+    final_mask_float = final_mask.astype(float) / 255.0
+    green_mask_float = green_mask_blurred.astype(float) / 255.0
+    non_screen_mask = cv2.bitwise_not(mask_blurred)
+    non_screen_mask_float = non_screen_mask.astype(float) / 255.0
     
-    # 使用green_mask提取屏幕区域，这部分将显示截图
-    background_mask = cv2.bitwise_and(mask, green_mask)
-    background = cv2.bitwise_and(warped_screenshot, warped_screenshot, mask=background_mask)
+    # 使用浮点掩码进行图像混合
+    result = np.zeros_like(template, dtype=float)
     
-    # 模板的非屏幕区域
-    non_screen_mask = cv2.bitwise_not(mask)
-    non_screen_area = cv2.bitwise_and(template, template, mask=non_screen_mask)
+    # 对每个颜色通道进行混合
+    for c in range(3):
+        # 非屏幕区域保持原样
+        result[:,:,c] += template[:,:,c] * non_screen_mask_float
+        
+        # 屏幕区域中的非绿色部分使用模板
+        result[:,:,c] += template[:,:,c] * final_mask_float
+        
+        # 屏幕区域中的绿色部分使用截图
+        result[:,:,c] += warped_screenshot[:,:,c] * green_mask_float * (mask_blurred / 255.0)
     
-    # 组合所有部分：非屏幕区域 + 屏幕区域中的非绿色部分 + 截图中对应绿色区域的部分
-    result = cv2.add(non_screen_area, foreground)
-    result = cv2.add(result, background)
+    # 转换回uint8类型
+    result = np.clip(result, 0, 255).astype(np.uint8)
     
     return result
 
