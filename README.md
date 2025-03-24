@@ -2,7 +2,7 @@
 
 ## 项目描述
 
-这个Python工具允许您将App截图无缝替换到手机模板图片上，创建出专业级的展示效果。它使用透视变换来确保App截图正确地适应手机屏幕的角度和形状，无论手机在模板图片中的位置和角度如何。
+这个Python工具允许您将App截图无缝替换到手机模板图片上，创建出专业级的展示效果。它使用透视变换来确保App截图正确地适应手机屏幕的角度和形状，无论手机在模板图片中的位置和角度如何。现在增加了API服务功能，可以通过HTTP请求便捷地完成图像处理。
 
 ## 功能特点
 
@@ -12,6 +12,8 @@
 - 处理单个或多个手机屏幕的模板
 - 高质量透视变换以确保自然效果
 - 简单的命令行界面
+- **REST API服务**：通过HTTP请求远程处理图像
+- **多种调用方式**：支持命令行和API两种使用方式
 
 ## 设计思路
 
@@ -46,9 +48,20 @@
    - 将角点坐标保存到JSON文件或从文件加载角点坐标
    - 便于重复使用相同的模板图像
 
+### API 服务
+
+API服务基于FastAPI框架实现，提供以下功能：
+
+1. **HTTP端点**：通过`/overlay/`端点接收图像处理请求
+2. **多文件上传**：支持上传模板图片和多张截图
+3. **JSON参数**：使用结构化JSON数据描述屏幕角点位置
+4. **异步处理**：异步处理上传的图像，提高性能
+5. **异常处理**：完善的错误处理和资源清理机制
+6. **临时文件管理**：自动管理和清理处理过程中的临时文件
+
 ## 使用方法
 
-### 基本用法
+### 命令行用法
 
 首次使用时，您需要选择手机屏幕的角点：
 
@@ -74,7 +87,45 @@ python main.py template.jpg new_screenshot.jpg -c template_corners.json -o new_r
 python main.py template.jpg screenshot1.jpg screenshot2.jpg -n 2 -s -o result.jpg
 ```
 
+### API 服务使用
+
+#### 启动API服务
+
+```bash
+python api.py
+```
+
+服务将在 http://localhost:8000 启动。您可以访问 http://localhost:8000/docs 查看交互式API文档。
+
+#### 通过curl调用API
+
+```bash
+curl -X 'POST' \
+     'http://localhost:8000/overlay/' \
+     -H 'accept: application/json' \
+     -H 'Content-Type: multipart/form-data' \
+     -F 'template=@template.jpg;type=image/jpeg' \
+     -F 'screenshots=@screenshot.jpg;type=image/jpeg' \
+     -F 'screen_data={"screens":[[[100,100],[300,100],[300,500],[100,500]]]}' \
+     -o result.jpg
+```
+
+#### 使用保存的角点文件
+
+```bash
+# 读取保存的角点文件并使用其中的坐标
+cat template_corners.json | curl -X 'POST' \
+     'http://localhost:8000/overlay/' \
+     -H 'Content-Type: multipart/form-data' \
+     -F 'template=@template.jpg' \
+     -F 'screenshots=@screenshot.jpg' \
+     -F "screen_data=<-" \
+     -o result.jpg
+```
+
 ## 参数说明
+
+### 命令行参数
 
 - `template`：手机模板图片路径（必需）
 - `screenshots`：一个或多个App截图路径（必需）
@@ -83,12 +134,32 @@ python main.py template.jpg screenshot1.jpg screenshot2.jpg -n 2 -s -o result.jp
 - `-s, --select`：启用交互式选择屏幕角点（可选）
 - `-n, --num-screens`：模板中手机屏幕的数量（默认：1）
 
+### API 参数
+
+- `template`：上传的手机模板图片（表单文件，必需）
+- `screenshots`：上传的App截图文件列表（表单文件数组，必需）
+- `screen_data`：以JSON格式提供的屏幕角点坐标（表单字段，必需），格式如下：
+
+```json
+{
+    "screens": [
+        [
+            [100, 100],  // 左上角
+            [300, 100],  // 右上角
+            [300, 500],  // 右下角
+            [100, 500]   // 左下角
+        ]
+    ]
+}
+```
+
 ## 提示与技巧
 
 1. **角点选择**：选择角点时，尽量精确定位到屏幕的实际边角，这将影响最终效果的质量
 2. **截图尺寸**：为获得最佳效果，使用分辨率较高的App截图
 3. **预处理模板**：使用质量高、光线均匀的模板图片，避免强烈的反光或阴影
 4. **多屏处理**：处理多个屏幕时，按照从左到右的顺序提供截图
+5. **API服务部署**：在生产环境中，建议使用Nginx等反向代理服务器
 
 ## 技术要求
 
@@ -96,13 +167,23 @@ python main.py template.jpg screenshot1.jpg screenshot2.jpg -n 2 -s -o result.jp
 - OpenCV (`cv2`)
 - NumPy
 - argparse
+- FastAPI (API服务)
+- uvicorn (ASGI服务器)
+- python-multipart (处理表单数据)
+
+## 安装依赖
+
+```bash
+pip install -r requirements.txt
+```
 
 ## 注意事项
 
 - 在交互式选择角点时，按ESC键可以提前退出
 - 确保角点选择的顺序正确：左上、右上、右下、左下
 - 为获得最佳效果，模板图片和截图的分辨率应该足够高
+- API服务默认监听所有网络接口(0.0.0.0)，可能需要根据安全需求进行调整
 
 ## 实例展示
 
-此工具可用于创建产品演示图片、应用宣传材料或UI/UX设计展示。
+此工具可用于创建产品演示图片、应用宣传材料或UI/UX设计展示。可以通过命令行方式批量处理图像，或者通过API服务集成到自动化工作流程中。
